@@ -40,19 +40,13 @@ To run this example you will need to have PHP installed. If you don't have then 
 
 ## Try It
 
-First, install the `dotenv` package to read the `.env` file.
-
-```text
-composer install
-```
-
-Now, run this example from the `src/unprotected-server` folder with:
+Run this example from the `src/unprotected-server` folder with:
 
 ```text
 php -S localhost:8002 hello-server-unprotected.php
 ```
 
-Finally, you can test that it works with:
+Now, you can test that it works with:
 
 ```text
 curl -iX GET 'http://localhost:8002'
