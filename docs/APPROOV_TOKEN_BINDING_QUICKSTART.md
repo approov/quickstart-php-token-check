@@ -54,7 +54,7 @@ approov api -add your.api.domain.com
 
 Adding the API domain also configures the [dynamic certificate pinning](https://approov.io/docs/latest/approov-usage-documentation/#approov-dynamic-pinning) setup, out of the box.
 
-> **NOTE:** By default the pin is extracted from the public key of the leaf certificate served by the domain, as visible to the box issuing the Approov CLI command and the Approov servers.
+> **NOTE:** By default the pin is extracted from the public key of the leaf certificate served by the domain, as visible to the box executing the Approov CLI command and the Approov servers.
 
 ### Approov Secret
 
@@ -121,14 +121,11 @@ function verifyApproovToken(Array $headers): ?stdClass {
 }
 
 function verifyApproovTokenBinding(Array $headers, stdClass $approov_token_claims): bool {
-
-    // Note that the `pay` claim will, under normal circumstances, be present,
-    // but if the Approov failover system is enabled, then no claim will be
-    // present, and in this case you want to return true, otherwise you will not
-    // be able to benefit from the redundancy afforded by the failover system.
+    // The `pay` key contains the token binding, thus it cannot be missing in
+    // the Approov token.
     if (empty($approov_token_claims->pay)) {
         // You may want to add some logging here
-        return true;
+        return false;
     }
 
     if (empty($headers['Authorization'])) {
