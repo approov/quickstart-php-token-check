@@ -42,20 +42,24 @@ To run this example you will need to have PHP installed. If you don't have then 
 
 Run this example from the `src/unprotected-server` folder with:
 
-```text
+```bash
 php -S localhost:8002 hello-server-unprotected.php
 ```
 
 Now, you can test that it works with:
 
-```text
+```bash
 curl -iX GET 'http://localhost:8002'
 ```
 
 The response will be:
 
 ```text
-HTTP/1.1 200
+HTTP/1.1 200 OK
+Host: localhost:8002
+Date: Tue, 22 Mar 2022 15:10:44 GMT
+Connection: close
+X-Powered-By: PHP/8.1.4
 Content-Type: application/json
 Content-Length: 27
 

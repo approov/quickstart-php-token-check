@@ -2,6 +2,7 @@
 
 require "vendor/autoload.php";
 
+error_reporting(E_ALL ^ E_DEPRECATED);
 error_log($_SERVER['REQUEST_METHOD']. " ".$_SERVER['REQUEST_URI']);
 
 $env = Dotenv\Dotenv::createArrayBacked(__DIR__)->load();
@@ -39,13 +40,9 @@ function verifyApproovToken(Array $headers): ?stdClass {
 }
 
 function verifyApproovTokenBinding(Array $headers, stdClass $approov_token_claims): bool {
-    // Note that the `pay` claim will, under normal circumstances, be present,
-    // but if the Approov failover system is enabled, then no claim will be
-    // present, and in this case you want to return true, otherwise you will not
-    // be able to benefit from the redundancy afforded by the failover system.
     if (empty($approov_token_claims->pay)) {
         // You may want to add some logging here
-        return true;
+        return false;
     }
 
     if (empty($headers['Authorization'])) {
@@ -71,7 +68,7 @@ function verifyApproovTokenBinding(Array $headers, stdClass $approov_token_claim
 }
 
 function sendResponse(int $http_status_code, Array $response) {
-    $response_body = json_encode($response);
+    $response_body = json_encode((object)$response);
     $content_length = strlen($response_body);
 
     http_response_code($http_status_code);

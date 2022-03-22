@@ -39,15 +39,39 @@ First, you need to set the dummy secret in the `src/approov-protected-server/tok
 
 Second, you need to install the dependencies. From the `src/approov-protected-server/token-check` folder execute:
 
-```text
+```bash
 composer install
 ```
 
 Now, you can run this example from the `src/approov-protected-server/token-check` folder with:
 
-```text
+```bash
 php -S localhost:8002 hello-server-protected.php
 ```
+
+> **NOTE:** If running from inside a docker container you need to start the server with `0.0.0.0:8002`, instead of `localhost:8002`.
+
+Next, you can test that it works with:
+
+```bash
+curl -iX GET 'http://localhost:8002'
+```
+
+The response will be a `401` unauthorized request:
+
+```text
+HTTP/1.1 401 Unauthorized
+Host: localhost:8002
+Date: Tue, 22 Mar 2022 16:09:47 GMT
+Connection: close
+X-Powered-By: PHP/8.1.4
+Content-Type: application/json
+Content-Length: 2
+
+{}
+```
+
+The reason you got a `401` is because no Approoov token isn't provided in the headers of the request.
 
 Finally, you can test that the Approov integration example works as expected with this [Postman collection](/README.md#testing-with-postman) or with some cURL requests [examples](/README.md#testing-with-curl).
 

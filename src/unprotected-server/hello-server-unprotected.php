@@ -3,7 +3,7 @@
 error_log($_SERVER['REQUEST_METHOD']. " ".$_SERVER['REQUEST_URI']);
 
 function sendResponse(int $http_status_code, Array $response) {
-    $response_body = json_encode($response);
+    $response_body = json_encode((object)$response);
     $content_length = strlen($response_body);
 
     http_response_code($http_status_code);
