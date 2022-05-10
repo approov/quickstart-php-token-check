@@ -22,6 +22,14 @@ function verifyApproovToken(Array $headers): ?stdClass {
 
         $approov_token = $headers['Approov-Token'];
 
+        // The Approov secret cannot be given as part of a JWKS key set,
+        // therefore you cannot use the Approov CLI to set a key id for it.
+        //
+        // If you set the key id then the token check will fail due to the
+        // presence of a `kid` key in the header of the Approov token, that
+        // will not be found in the `$approov_secret` variable, because this
+        // variable contains the secret as a binary string, not as a JWKs
+        // key set.
         return \Firebase\JWT\JWT::decode($approov_token, constant('APPROOV_BASE64_SECRET'), ['HS256']);
 
     } catch(\UnexpectedValueException $exception) {
