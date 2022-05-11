@@ -108,6 +108,16 @@ if (!$approov_token_claims) {
 
 > **NOTE:** When the Approov token validation fails we return a `401` with an empty body, because we don't want to give clues to an attacker about the reason the request failed, and you can go even further by returning a `400`.
 
+Not enough details in the bare bones quickstart? No worries, check the [detailed quickstarts](QUICKSTARTS.md) that contain a more comprehensive set of instructions, including how to test the Approov integration.
+
+
+## More Information
+
+* [Approov Overview](OVERVIEW.md)
+* [Detailed Quickstarts](QUICKSTARTS.md)
+* [Examples](EXAMPLES.md)
+* [Testing](TESTING.md)
+
 
 ## Issues
 
