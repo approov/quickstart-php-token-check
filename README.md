@@ -7,7 +7,7 @@ This project provides a server-side example of Approov token verification for a 
  - `/token-binding` - requires a valid Approov token which is bound to a header value.
  - `/token-double-binding` - requires a valid Approov token which is bound to two header values.
 
-In this example, Approov protection is implemented by the [ApproovTokenVerifier](https://github.com/KMilej/quickstart-php-laravel-token-check/blob/refactor/laravel-quickstart/app/Http/Middleware/ApproovTokenVerifier.php#L11-L188), which validates the Approov token (signature + expiry) and enforces token binding where required. Protected routes are grouped under the ApproovTokenVerifier route middleware in [api.php](https://github.com/KMilej/quickstart-php-laravel-token-check/blob/refactor/laravel-quickstart/routes/api.php#L36-L55).
+In this example, Approov protection is implemented by the [ApproovTokenVerifier](https://github.com/KMilej/PHP/blob/refactor/php-quickstart/ApproovApplication.php#L438-L478), which validates the Approov token (signature + expiry) and enforces token binding where required. Protected routes are handled by the [ApproovTokenMiddleware](https://github.com/KMilej/PHP/blob/refactor/php-quickstart/ApproovApplication.php#L481-L526).
 
 ## Approov Token Verification Flow
 
