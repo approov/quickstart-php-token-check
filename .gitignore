@@ -1,2 +1,6 @@
 .env
 vendor/
+.DS_Store
+.local/
+.config/
+
