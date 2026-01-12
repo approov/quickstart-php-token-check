@@ -22,8 +22,8 @@ WAIT_URL="${WAIT_URL:-http://localhost:${HOST_PORT}/approov-state}" # readiness 
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-60}"                   # how long to wait before failing readiness
 WAIT_INTERVAL="${WAIT_INTERVAL:-2}"                   # delay between readiness checks
 CONTAINER_PORT="${CONTAINER_PORT:-$HOST_PORT}"       # container listener, defaults to host port
-IMAGE_NAME="${IMAGE_NAME:-approov-quickstart-java-spring}"
-CONTAINER_NAME="${CONTAINER_NAME:-approov-quickstart-java-spring-app}"
+IMAGE_NAME="${IMAGE_NAME:-approov-quickstart-php}"
+CONTAINER_NAME="${CONTAINER_NAME:-approov-quickstart-php-app}"
 ENV_FILE="${ENV_FILE:-.env}"
 RUNTIME_BIN_DIR="${RUNTIME_BIN_DIR:-}"            # optional runtime-specific bin path
 
@@ -33,6 +33,11 @@ in_container() {
 
 if in_container; then
   [[ -n "$APP_START_CMD" ]] || fail "APP_START_CMD must be provided to run the server"
+  # Strip optional surrounding quotes so bash -c runs the command.
+  if [[ "$APP_START_CMD" == \"*\" && "$APP_START_CMD" == *\" ]]; then
+    APP_START_CMD="${APP_START_CMD#\"}"
+    APP_START_CMD="${APP_START_CMD%\"}"
+  fi
   if [[ -n "$RUNTIME_BIN_DIR" ]]; then
     export PATH="${RUNTIME_BIN_DIR}:$PATH" # e.g., RUNTIME_BIN_DIR=/usr/local/go/bin to expose runtime binaries for golang
   fi

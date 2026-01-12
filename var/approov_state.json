@@ -1,4 +1,4 @@
 {
-    "approovEnabled": false,
-    "tokenBindingEnabled": false
+    "approovEnabled": true,
+    "tokenBindingEnabled": true
 }
