@@ -10,5 +10,8 @@
   },
   "scripts": {
     "start": "php -S 0.0.0.0:8080 ApproovApplication.php 2>&1 | grep -vE 'Accepted|Closing'"
+  },
+  "config": {
+    "process-timeout": 0
   }
 }

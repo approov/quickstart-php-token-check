@@ -3,8 +3,6 @@
 require __DIR__ . '/vendor/autoload.php';
 
 use Dotenv\Dotenv;
-use Firebase\JWT\JWT;
-use Firebase\JWT\Key;
 
 Dotenv::createImmutable(__DIR__)->safeLoad();
 
@@ -30,7 +28,7 @@ final class Base64Url
         }
         $decoded = base64_decode($normalized, true);
         if ($decoded === false) {
-            throw new RuntimeException('Invalid base64url value.');
+            throw new UnexpectedValueException('Invalid base64url data.');
         }
         return $decoded;
     }
@@ -38,16 +36,71 @@ final class Base64Url
 
 final class ApproovSecret
 {
-    public static function fromEnv(string $name): string
+    private string $envName;
+    private ?string $secret = null;
+    private ?string $error = null;
+    private bool $loaded = false;
+
+    public function __construct(string $envName)
     {
-        $value = getenv($name);
+        $this->envName = $envName;
+    }
+
+    public function secret(): string
+    {
+        $this->load();
+        if ($this->secret === null) {
+            throw new RuntimeException($this->error ?? 'Approov secret is missing.');
+        }
+        return $this->secret;
+    }
+
+    public function hasSecret(): bool
+    {
+        $this->load();
+        return $this->secret !== null;
+    }
+
+    public function error(): ?string
+    {
+        $this->load();
+        return $this->error;
+    }
+
+    public function logIfMissing(ApproovLogger $logger): void
+    {
+        if ($this->hasSecret()) {
+            return;
+        }
+
+        $context = ['env' => $this->envName];
+        if ($this->error !== null) {
+            $context['error'] = $this->error;
+        }
+        $logger->warning('Approov secret missing.', $context);
+    }
+
+    private function load(): void
+    {
+        if ($this->loaded) {
+            return;
+        }
+        $this->loaded = true;
+
+        $value = getenv($this->envName);
         if (!Text::hasText($value)) {
-            $value = $_ENV[$name] ?? $_SERVER[$name] ?? null;
+            $value = $_ENV[$this->envName] ?? $_SERVER[$this->envName] ?? null;
         }
         if (!Text::hasText($value)) {
-            throw new RuntimeException("Missing environment variable: {$name}");
+            $this->error = "Missing environment variable: {$this->envName}";
+            return;
         }
-        return Base64Url::decode(trim((string) $value));
+
+        try {
+            $this->secret = Base64Url::decode(trim((string) $value));
+        } catch (Throwable $exception) {
+            $this->error = $exception->getMessage();
+        }
     }
 }
 
@@ -57,6 +110,8 @@ final class Request
     private string $path;
     /** @var array<string, string> */
     private array $headers;
+    /** @var array<string, mixed> */
+    private array $attributes = [];
 
     /** @param array<string, string> $headers */
     public function __construct(string $method, string $path, array $headers)
@@ -100,6 +155,16 @@ final class Request
             return null;
         }
         return trim((string) $value);
+    }
+
+    public function setAttribute(string $name, mixed $value): void
+    {
+        $this->attributes[$name] = $value;
+    }
+
+    public function getAttribute(string $name, mixed $default = null): mixed
+    {
+        return $this->attributes[$name] ?? $default;
     }
 
     /** @return array<string, string> */
@@ -169,6 +234,52 @@ final class Response
         }
         echo $this->body;
     }
+
+    public function status(): int
+    {
+        return $this->status;
+    }
+}
+
+final class ApproovLogger
+{
+    private string $channel;
+
+    public function __construct(string $channel = 'approov')
+    {
+        $this->channel = $channel;
+    }
+
+    /** @param array<string, mixed> $context */
+    public function warning(string $message, array $context = []): void
+    {
+        $this->write('warning', $message, $context);
+    }
+
+    /** @param array<string, mixed> $context */
+    public function info(string $message, array $context = []): void
+    {
+        $this->write('info', $message, $context);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function write(string $level, string $message, array $context): void
+    {
+        $line = $message;
+
+        if ($level !== '') {
+            $context = array_merge(['level' => $level], $context);
+        }
+
+        if (!empty($context)) {
+            $payload = json_encode($context, JSON_UNESCAPED_SLASHES);
+            if ($payload !== false) {
+                $line .= ' ' . $payload;
+            }
+        }
+
+        error_log($line);
+    }
 }
 
 final class Protection
@@ -196,13 +307,17 @@ final class Route
     /** @var callable */
     private $handler;
     private int $protection;
+    /** @var string[] */
+    private array $bindingHeaders;
 
-    public function __construct(string $method, string $path, callable $handler, int $protection)
+    /** @param string[] $bindingHeaders */
+    public function __construct(string $method, string $path, callable $handler, int $protection, array $bindingHeaders = [])
     {
         $this->method = strtoupper($method);
         $this->path = $path;
         $this->handler = $handler;
         $this->protection = $protection;
+        $this->bindingHeaders = $bindingHeaders;
     }
 
     public function matches(Request $request): bool
@@ -219,6 +334,12 @@ final class Route
     {
         return $this->protection;
     }
+
+    /** @return string[] */
+    public function bindingHeaders(): array
+    {
+        return $this->bindingHeaders;
+    }
 }
 
 final class Router
@@ -226,9 +347,16 @@ final class Router
     /** @var Route[] */
     private array $routes = [];
 
-    public function add(string $method, string $path, callable $handler, int $protection = Protection::NONE): void
+    /** @param string[] $bindingHeaders */
+    public function add(
+        string $method,
+        string $path,
+        callable $handler,
+        int $protection = Protection::NONE,
+        array $bindingHeaders = []
+    ): void
     {
-        $this->routes[] = new Route($method, $path, $handler, $protection);
+        $this->routes[] = new Route($method, $path, $handler, $protection, $bindingHeaders);
     }
 
     public function match(Request $request): ?Route
@@ -405,92 +533,116 @@ final class ApproovStateStore
     }
 }
 
-final class TokenClaims
-{
-    /** @var array<string, mixed> */
-    private array $claims;
-
-    /** @param array<string, mixed> $claims */
-    public function __construct(array $claims)
-    {
-        $this->claims = $claims;
-    }
-
-    public function pay(): ?string
-    {
-        $pay = $this->claims['pay'] ?? null;
-        return is_string($pay) ? $pay : null;
-    }
-
-    public function exp(): ?int
-    {
-        $exp = $this->claims['exp'] ?? null;
-        if (is_int($exp)) {
-            return $exp;
-        }
-        if (is_numeric($exp)) {
-            return (int) $exp;
-        }
-        return null;
-    }
-}
-
 final class ApproovTokenVerifier
 {
-    private string $secret;
+    private ApproovSecret $secret;
 
-    public function __construct(string $secret)
+    public function __construct(ApproovSecret $secret)
     {
         $this->secret = $secret;
     }
 
-    public function decode(string $token): ?TokenClaims
+    /** @return array<string, mixed> */
+    public function verifyApproovToken(string $token): array
     {
-        try {
-            // Verify the JWT signature + expiration using the shared Approov secret.
-            $decoded = JWT::decode($token, new Key($this->secret, 'HS256'));
-            $claims = new TokenClaims(get_object_vars($decoded));
-            $exp = $claims->exp();
-            if ($exp === null || $exp < time()) {
-                return null;
-            }
-            return $claims;
-        } catch (Throwable $exception) {
-            return null;
+        $parts = explode('.', $token);
+        if (count($parts) !== 3) {
+            throw new UnexpectedValueException('Invalid JWT format.');
         }
+
+        [$encodedHeader, $encodedPayload, $encodedSignature] = $parts;
+
+        $header = $this->decodeJwtPart($encodedHeader);
+        $payload = $this->decodeJwtPart($encodedPayload);
+
+        $algorithm = $header['alg'] ?? null;
+        $hashAlgorithm = $this->mapJwtAlgorithm(is_string($algorithm) ? $algorithm : null);
+
+        $signature = Base64Url::decode($encodedSignature);
+        $signingInput = $encodedHeader . '.' . $encodedPayload;
+        $expected = hash_hmac($hashAlgorithm, $signingInput, $this->secret->secret(), true);
+
+        if (!hash_equals($expected, $signature)) {
+            throw new UnexpectedValueException('Invalid JWT signature.');
+        }
+
+        $this->validateExpiration($payload);
+        return $payload;
     }
 
-    public function isBindingValid(string $bindingValue, TokenClaims $claims): bool
+    /** @param array<string, mixed> $claims */
+    public function isBindingValid(string $bindingValue, array $claims): bool
     {
-        $expected = $claims->pay();
+        $expected = $claims['pay'] ?? null;
         if (!Text::hasText($expected)) {
             return false;
         }
 
-        $computed = $this->hashBinding($bindingValue);
-        return hash_equals($expected, $computed);
+        $computed = $this->hashBase64($bindingValue);
+        return trim((string) $expected) === $computed;
     }
 
-    private function hashBinding(string $bindingValue): string
+    /** @param array<string, mixed> $claims */
+    private function validateExpiration(array $claims): void
     {
-        $hash = hash('sha256', $bindingValue, true);
-        return base64_encode($hash);
+        if (!array_key_exists('exp', $claims)) {
+            throw new UnexpectedValueException('Approov token missing expiration.');
+        }
+
+        $expiration = (int) $claims['exp'];
+        if ($expiration < time()) {
+            throw new UnexpectedValueException('Approov token expired.');
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function decodeJwtPart(string $value): array
+    {
+        $decoded = Base64Url::decode($value);
+        $json = json_decode($decoded, true);
+        if (!is_array($json)) {
+            throw new UnexpectedValueException('Invalid JWT payload.');
+        }
+        return $json;
+    }
+
+    private function hashBase64(string $value): string
+    {
+        return base64_encode(hash('sha256', $value, true));
+    }
+
+    private function mapJwtAlgorithm(?string $algorithm): string
+    {
+        return match ($algorithm) {
+            'HS256' => 'sha256',
+            default => throw new UnexpectedValueException('Unsupported JWT algorithm.'),
+        };
     }
 }
 
 final class ApproovTokenMiddleware
 {
     private const APPROOV_HEADER = 'Approov-Token';
-    private const AUTH_HEADER = 'Authorization';
-    private const DIGEST_HEADER = 'Content-Digest';
+    private const REQUEST_ID_HEADER = 'X-Request-Id';
+    private const REQUEST_ID_ATTRIBUTE = 'request_id';
+    private const APPROOV_REQUIRED_HEADERS_ATTRIBUTE = 'approov_required_headers';
+    private const APPROOV_FAILURE_ATTRIBUTE = 'approov_failure';
 
     private ApproovStateStore $stateStore;
     private ApproovTokenVerifier $validator;
+    private ApproovSecret $secret;
+    private ApproovLogger $logger;
 
-    public function __construct(ApproovStateStore $stateStore, ApproovTokenVerifier $validator)
-    {
+    public function __construct(
+        ApproovStateStore $stateStore,
+        ApproovTokenVerifier $validator,
+        ApproovSecret $secret,
+        ApproovLogger $logger
+    ) {
         $this->stateStore = $stateStore;
         $this->validator = $validator;
+        $this->secret = $secret;
+        $this->logger = $logger;
     }
 
     /** @param callable(Request): Response $next */
@@ -500,45 +652,294 @@ final class ApproovTokenMiddleware
             return $next($request);
         }
 
+        $bindingHeaders = $this->normalizeBindingHeaders($route->bindingHeaders());
         $state = $this->stateStore->getState();
+
+        if ($state->approovEnabled()) {
+            $this->secret->logIfMissing($this->logger);
+            $request->setAttribute(
+                self::APPROOV_REQUIRED_HEADERS_ATTRIBUTE,
+                $this->requiredHeaders($state, $bindingHeaders)
+            );
+        }
+
         if (!$state->approovEnabled()) {
+            $request->setAttribute('approov_auth', $this->disabledAuthentication());
             return $next($request);
         }
 
-        $token = $request->header(self::APPROOV_HEADER);
-        if (!Text::hasText($token)) {
-            return Response::json([], 401);
+        $rawToken = $request->header(self::APPROOV_HEADER);
+        if (!Text::hasText($rawToken)) {
+            return $this->unauthorized($request, $state, 'missing_approov_token', $bindingHeaders);
         }
 
-        $claims = $this->validator->decode((string) $token);
-        if ($claims === null) {
-            return Response::json([], 401);
-        }
+        try {
+            $claims = $this->validator->verifyApproovToken(trim($rawToken));
 
-        if (Protection::requiresBinding($route->protection()) && $state->tokenBindingEnabled()) {
-            // Token binding: hash header(s) and compare against the 'pay' claim.
-            $bindingValue = $this->bindingValue($route, $request);
-            if (!Text::hasText($bindingValue) || !$this->validator->isBindingValid($bindingValue, $claims)) {
-                return Response::json([], 401);
+            if ($state->tokenBindingEnabled() && $bindingHeaders !== []) {
+                $bindingValue = $this->extractBindingValue($request, $bindingHeaders);
+                if (!Text::hasText($bindingValue)) {
+                    return $this->unauthorized($request, $state, 'missing_binding_header', $bindingHeaders);
+                }
+                if (!$this->validator->isBindingValid($bindingValue, $claims)) {
+                    return $this->unauthorized($request, $state, 'binding_mismatch', $bindingHeaders);
+                }
             }
-        }
 
-        return $next($request);
+            $request->setAttribute('approov_auth', ['principal' => 'approov-token']);
+            return $next($request);
+        } catch (Throwable $exception) {
+            return $this->unauthorized($request, $state, 'token_verification_failed', $bindingHeaders, [
+                'error' => $exception->getMessage(),
+                'exception' => get_class($exception),
+            ]);
+        }
     }
 
-    private function bindingValue(Route $route, Request $request): ?string
+    /** @param string[] $bindingHeaders
+     *  @param array<string, mixed> $context
+     */
+    private function unauthorized(
+        Request $request,
+        ApproovState $state,
+        string $reason,
+        array $bindingHeaders = [],
+        array $context = []
+    ): Response {
+        $context = array_merge($this->baseLogContext($request, $state, $reason, $bindingHeaders), $context);
+        $request->setAttribute(self::APPROOV_FAILURE_ATTRIBUTE, $context);
+
+        return Response::json(['message' => 'Approov authentication failed.'], 401);
+    }
+
+    /** @param string[] $bindingHeaders
+     *  @return array<string, mixed>
+     */
+    private function baseLogContext(Request $request, ApproovState $state, string $reason, array $bindingHeaders): array
     {
-        if ($route->protection() === Protection::TOKEN_BINDING) {
-            return $request->header(self::AUTH_HEADER);
+        $context = [
+            'reason' => $reason,
+            'method' => $request->method(),
+            'path' => $request->path(),
+            'approov' => [
+                'enabled' => $state->approovEnabled(),
+                'binding_enabled' => $state->tokenBindingEnabled(),
+                'headers' => $this->approovHeaderFlags($request, $state, $bindingHeaders),
+            ],
+        ];
+
+        $requestId = $this->requestId($request);
+        if ($requestId !== null) {
+            $context['request_id'] = $requestId;
         }
 
-        $authorization = $request->header(self::AUTH_HEADER);
-        $digest = $request->header(self::DIGEST_HEADER);
-        if (!Text::hasText($authorization) || !Text::hasText($digest)) {
+        return $context;
+    }
+
+    private function requestId(Request $request): ?string
+    {
+        $value = $request->getAttribute(self::REQUEST_ID_ATTRIBUTE);
+        if (is_string($value) && $value !== '') {
+            return $value;
+        }
+
+        $fromHeader = $request->header(self::REQUEST_ID_HEADER);
+        if (!is_string($fromHeader)) {
             return null;
         }
 
-        return $authorization . $digest;
+        $trimmed = trim($fromHeader);
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    /** @param string[] $bindingHeaders
+     *  @return array<string, mixed>
+     */
+    private function approovHeaderFlags(Request $request, ApproovState $state, array $bindingHeaders): array
+    {
+        $flags = [
+            'approov_token' => Text::hasText($request->header(self::APPROOV_HEADER)),
+        ];
+
+        if ($state->tokenBindingEnabled() && $bindingHeaders !== []) {
+            $bindingFlags = [];
+            foreach ($bindingHeaders as $header) {
+                $bindingFlags[$header] = Text::hasText($request->header($header));
+            }
+            $flags['binding_headers'] = $bindingFlags;
+        }
+
+        return $flags;
+    }
+
+    /** @param string[] $bindingHeaders
+     *  @return string[]
+     */
+    private function requiredHeaders(ApproovState $state, array $bindingHeaders): array
+    {
+        $headers = [self::APPROOV_HEADER];
+
+        if (!$state->tokenBindingEnabled() || $bindingHeaders === []) {
+            return $headers;
+        }
+
+        return array_merge($headers, $bindingHeaders);
+    }
+
+    /** @param string[] $bindingHeaders */
+    private function extractBindingValue(Request $request, array $bindingHeaders): ?string
+    {
+        $values = [];
+        foreach ($bindingHeaders as $header) {
+            $value = $this->trimOrNull($request->header($header));
+            if (!Text::hasText($value)) {
+                return null;
+            }
+            $values[] = $value;
+        }
+
+        return implode('', $values);
+    }
+
+    private function disabledAuthentication(): array
+    {
+        return ['principal' => 'approov-disabled'];
+    }
+
+    private function trimOrNull(?string $value): ?string
+    {
+        return $value === null ? null : trim($value);
+    }
+
+    /** @param string[] $headers
+     *  @return string[]
+     */
+    private function normalizeBindingHeaders(array $headers): array
+    {
+        $normalized = [];
+        foreach ($headers as $header) {
+            if (!is_string($header)) {
+                continue;
+            }
+            $trimmed = trim($header);
+            if ($trimmed === '') {
+                continue;
+            }
+            $normalized[] = $trimmed;
+        }
+
+        return $normalized;
+    }
+}
+
+final class RequestCompletionLogger
+{
+    private const REQUEST_ID_HEADER = 'X-Request-Id';
+    private const REQUEST_ID_ATTRIBUTE = 'request_id';
+    private const APPROOV_REQUIRED_HEADERS_ATTRIBUTE = 'approov_required_headers';
+    private const APPROOV_FAILURE_ATTRIBUTE = 'approov_failure';
+
+    private ApproovLogger $logger;
+    private ApproovStateStore $stateStore;
+
+    public function __construct(ApproovLogger $logger, ApproovStateStore $stateStore)
+    {
+        $this->logger = $logger;
+        $this->stateStore = $stateStore;
+    }
+
+    public function log(Request $request, Response $response): void
+    {
+        $status = $response->status();
+        if ($status !== 200 && $status !== 401) {
+            return;
+        }
+
+        $state = $this->stateStore->getState();
+
+        $context = [
+            'summary' => $this->summary($request, $status),
+            'method' => $request->method(),
+            'path' => $request->path(),
+            'status' => $status,
+            'ip' => $this->clientIp(),
+            'port' => $this->serverPort(),
+            'approovEnabled' => $state->approovEnabled(),
+            'tokenBindingEnabled' => $state->tokenBindingEnabled(),
+        ];
+
+        $requiredHeaders = $request->getAttribute(self::APPROOV_REQUIRED_HEADERS_ATTRIBUTE);
+        if (is_array($requiredHeaders) && $requiredHeaders !== []) {
+            $context['required_headers'] = array_values($requiredHeaders);
+        }
+
+        $requestId = $this->requestId($request);
+        if ($requestId !== null) {
+            $context['request_id'] = $requestId;
+        }
+
+        $this->logger->info('http.request.completed', $context);
+    }
+
+    private function summary(Request $request, int $status): string
+    {
+        if ($status === 401) {
+            $failure = $request->getAttribute(self::APPROOV_FAILURE_ATTRIBUTE);
+            if (is_array($failure)) {
+                $reason = $failure['reason'] ?? null;
+                if (Text::hasText($reason)) {
+                    return 'approov_failed:' . $reason;
+                }
+            }
+            return 'approov_failed:unauthorized';
+        }
+
+        $auth = $request->getAttribute('approov_auth');
+        if (is_array($auth)) {
+            $principal = $auth['principal'] ?? null;
+            if ($principal === 'approov-token') {
+                return 'approov_ok';
+            }
+            if ($principal === 'approov-disabled') {
+                return 'approov_disabled';
+            }
+        }
+
+        return 'ok';
+    }
+
+    private function clientIp(): ?string
+    {
+        $value = $_SERVER['REMOTE_ADDR'] ?? null;
+        return Text::hasText($value) ? (string) $value : null;
+    }
+
+    private function serverPort(): ?int
+    {
+        $value = $_SERVER['SERVER_PORT'] ?? $_SERVER['HTTP_PORT'] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+        return null;
+    }
+
+    private function requestId(Request $request): ?string
+    {
+        $value = $request->getAttribute(self::REQUEST_ID_ATTRIBUTE);
+        if (is_string($value) && $value !== '') {
+            return $value;
+        }
+
+        $fromHeader = $request->header(self::REQUEST_ID_HEADER);
+        if (!is_string($fromHeader)) {
+            return null;
+        }
+
+        $trimmed = trim($fromHeader);
+        return $trimmed === '' ? null : $trimmed;
     }
 }
 
@@ -610,7 +1011,7 @@ final class ApproovController
     {
         $payload = $this->infoPayload("Protected endpoint '/token-double-binding'; dual token binding enforced.");
         $payload['authorizationHeaderPresent'] = Text::hasText($request->header('Authorization'));
-        $payload['contentDigestHeaderPresent'] = Text::hasText($request->header('Content-Digest'));
+        $payload['sessionIdHeaderPresent'] = Text::hasText($request->header('SessionId'));
         return Response::json($payload);
     }
 
@@ -629,11 +1030,13 @@ final class ApproovController
     }
 }
 
-$secret = ApproovSecret::fromEnv('APPROOV_BASE64URL_SECRET');
+$secret = new ApproovSecret('APPROOV_BASE64URL_SECRET');
+$logger = new ApproovLogger();
 $stateStore = new ApproovStateStore(__DIR__ . '/var/approov_state.json');
 $validator = new ApproovTokenVerifier($secret);
-$middleware = new ApproovTokenMiddleware($stateStore, $validator);
+$middleware = new ApproovTokenMiddleware($stateStore, $validator, $secret, $logger);
 $controller = new ApproovController($stateStore);
+$requestLogger = new RequestCompletionLogger($logger, $stateStore);
 
 $router = new Router();
 $router->add('GET', '/', [$controller, 'home']);
@@ -644,14 +1047,14 @@ $router->add('POST', '/token-binding/enable', [$controller, 'enableTokenBinding'
 $router->add('POST', '/token-binding/disable', [$controller, 'disableTokenBinding']);
 $router->add('GET', '/unprotected', [$controller, 'unprotected']);
 $router->add('GET', '/token-check', [$controller, 'tokenCheck'], Protection::TOKEN);
-$router->add('GET', '/token-binding', [$controller, 'tokenBinding'], Protection::TOKEN_BINDING);
-$router->add('GET', '/token-double-binding', [$controller, 'tokenDoubleBinding'], Protection::TOKEN_DOUBLE_BINDING);
+$router->add('GET', '/token-binding', [$controller, 'tokenBinding'], Protection::TOKEN_BINDING, ['Authorization']);
+$router->add('GET', '/token-double-binding', [$controller, 'tokenDoubleBinding'], Protection::TOKEN_DOUBLE_BINDING, ['Authorization', 'SessionId']);
 
 $request = Request::fromGlobals();
 
 $route = $router->match($request);
 
-if($route === null) {
+if ($route === null) {
     Response::json(['error' => 'Not Found'], 404)->send();
     exit;
 }
@@ -665,4 +1068,5 @@ $response = $middleware->handle(
     }
 );
 
+$requestLogger->log($request, $response);
 $response->send();
