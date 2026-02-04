@@ -10,25 +10,25 @@ This project provides a server-side example of Approov token verification for a 
 In this example:
 
 - **JWT Approov Token validation (signature + expiry)** is implemented in
-  [ApproovTokenVerifier::decode()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L447-L461).
+  [ApproovTokenVerifier::verifyApproovToken()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L542-L566).
   It verifies the JWT signature and rejects tokens with missing or expired `exp`.
 
 - **Token binding (`pay` + hash)** is implemented in
-  [ApproovTokenVerifier::isBindingValid() + hashBinding()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L463-L477).
-  It computes `base64(sha256(bindingValue))` and compares it to `pay` using a constant-time check.
+  [ApproovTokenVerifier::isBindingValid() + hashBase64()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L570-L607).
+  It computes `base64(sha256(bindingValue))` and compares it to `pay`.
 
 - **Middleware enforcement (token + binding)** is in
-  [ApproovTokenMiddleware::handle()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L496-L526).
+  [ApproovTokenMiddleware::handle()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L636-L682).
   It requires the `Approov-Token` header and returns `401` if the token is missing or invalid.
 
 - **Binding value selection (what gets hashed)** is in
-  [ApproovTokenMiddleware::bindingValue()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L529-L541).
-  It uses `Authorization` for single binding, or `Authorization + Content-Digest` for double binding.
+  [ApproovTokenMiddleware::extractBindingValue()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L759-L770).
+  It uses `Authorization` for single binding, or `Authorization + SessionId` for double binding.
 
 - **Protected route levels** are defined in
-  [Protection](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L174-L186),
+  [Protection](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L292-L307),
   and **protected routes are registered** at
-  [ApproovApplication.php](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L646-L648).
+  [ApproovApplication.php](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L986-L996).
 
 ## Approov Token Verification Flow
 
@@ -99,7 +99,7 @@ bash test.sh
 This script:
 - Verifies that the `approov` and `curl` commands are installed.
 - Checks Approov status by calling `/approov-state` (enabled vs disabled).
-- Runs endpoint tests against `/unprotected` (no token), `/token-check` (valid/invalid Approov tokens), `/token-binding` (token bound to `Authorization`), and `/token-double-binding` (token bound to `Authorization` + `Content-Digest`).
+- Runs endpoint tests against `/unprotected` (no token), `/token-check` (valid/invalid Approov tokens), `/token-binding` (token bound to `Authorization`), and `/token-double-binding` (token bound to `Authorization` + `SessionId`).
 - Logs full request/response details to `.config/logs/<timestamp>.log`.
 
 #### *1. Unprotected Endpoint (No Approov)*
@@ -196,16 +196,16 @@ Cache-Control: no-cache
 - The client sends three headers on authenticated API calls:
     - `Approov-Token`
     - `Authorization`
-    - `Content-Digest` It is combined with the `Authorization` header to create a stronger binding.
-- Both are included in the hash inside the Approov token. This means the server verifies a single hash that covers both authentication credentials.
+    - `SessionId` It is combined with the `Authorization` header to create a stronger binding.
+- Both are included in the hash inside the Approov token. This means the server verifies a single hash that covers both authentication credentials. The binding value is the concatenation of the headers in order.
 - **Use case:** Stronger protection then single binding by tying both headers together.
 
 ***The following example shows how the API responds when an Approov token with two bindings is required.***
 
-*Generate a valid Approov token bound to the `Authorization` and `Content-Digest` headers:*
+*Generate a valid Approov token bound to the `Authorization` and `SessionId` headers:*
 
 ```bash
-approov token -setDataHashInToken ExampleAuthToken==ContentDigest== -genExample example.com
+approov token -setDataHashInToken ExampleAuthToken==123 -genExample example.com
 ```
 
 *Use the generated token with two bindings in the Approov-Token and Authorization headers when calling the `/token-double-binding` endpoint.*
@@ -214,7 +214,7 @@ approov token -setDataHashInToken ExampleAuthToken==ContentDigest== -genExample 
 curl -iX GET http://localhost:8080/token-double-binding \
      -H "Approov-Token: valid_approov_token_here" \
      -H "Authorization: ExampleAuthToken==" \
-     -H "Content-Digest: ContentDigest=="
+     -H "SessionId: 123"
 ```
 
 The response will be `200 OK` for this request.

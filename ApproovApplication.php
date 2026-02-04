@@ -10,10 +10,7 @@ final class Text
 {
     public static function hasText(mixed $value): bool
     {
-        if (!is_string($value)) {
-            return false;
-        }
-        return trim($value) !== '';
+        return is_string($value) && trim($value) !== '';
     }
 }
 
@@ -23,27 +20,27 @@ final class Base64Url
     {
         $normalized = strtr($value, '-_', '+/');
         $padding = strlen($normalized) % 4;
-        if ($padding > 0) {
+        if ($padding !== 0) {
             $normalized .= str_repeat('=', 4 - $padding);
         }
+
         $decoded = base64_decode($normalized, true);
         if ($decoded === false) {
             throw new UnexpectedValueException('Invalid base64url data.');
         }
+
         return $decoded;
     }
 }
 
 final class ApproovSecret
 {
-    private string $envName;
     private ?string $secret = null;
     private ?string $error = null;
     private bool $loaded = false;
 
-    public function __construct(string $envName)
+    public function __construct(private string $envName)
     {
-        $this->envName = $envName;
     }
 
     public function secret(): string
@@ -87,20 +84,27 @@ final class ApproovSecret
         }
         $this->loaded = true;
 
-        $value = getenv($this->envName);
-        if (!Text::hasText($value)) {
-            $value = $_ENV[$this->envName] ?? $_SERVER[$this->envName] ?? null;
-        }
-        if (!Text::hasText($value)) {
+        $value = $this->readEnv();
+        if ($value === null) {
             $this->error = "Missing environment variable: {$this->envName}";
             return;
         }
 
         try {
-            $this->secret = Base64Url::decode(trim((string) $value));
+            $this->secret = Base64Url::decode(trim($value));
         } catch (Throwable $exception) {
             $this->error = $exception->getMessage();
         }
+    }
+
+    private function readEnv(): ?string
+    {
+        $value = getenv($this->envName);
+        if (!Text::hasText($value)) {
+            $value = $_ENV[$this->envName] ?? $_SERVER[$this->envName] ?? null;
+        }
+
+        return Text::hasText($value) ? (string) $value : null;
     }
 }
 
@@ -130,11 +134,7 @@ final class Request
             $path = '/';
         }
 
-        return new self(
-            $method,
-            $path,
-            self::collectHeaders()
-        );
+        return new self($method, $path, self::collectHeaders());
     }
 
     public function method(): string
@@ -149,12 +149,8 @@ final class Request
 
     public function header(string $name): ?string
     {
-        $key = strtolower($name);
-        $value = $this->headers[$key] ?? null;
-        if (!Text::hasText($value)) {
-            return null;
-        }
-        return trim((string) $value);
+        $value = $this->headers[strtolower($name)] ?? null;
+        return Text::hasText($value) ? trim((string) $value) : null;
     }
 
     public function setAttribute(string $name, mixed $value): void
@@ -165,6 +161,22 @@ final class Request
     public function getAttribute(string $name, mixed $default = null): mixed
     {
         return $this->attributes[$name] ?? $default;
+    }
+
+    public function requestId(string $headerName, string $attributeName): ?string
+    {
+        $value = $this->getAttribute($attributeName);
+        if (is_string($value) && $value !== '') {
+            return $value;
+        }
+
+        $fromHeader = $this->header($headerName);
+        if (!is_string($fromHeader)) {
+            return null;
+        }
+
+        $trimmed = trim($fromHeader);
+        return $trimmed === '' ? null : $trimmed;
     }
 
     /** @return array<string, string> */
@@ -183,7 +195,10 @@ final class Request
             if (str_starts_with($key, 'HTTP_')) {
                 $header = strtolower(str_replace('_', '-', substr($key, 5)));
                 $headers[$header] = trim((string) $value);
-            } elseif (in_array($key, ['CONTENT_TYPE', 'CONTENT_LENGTH'], true)) {
+                continue;
+            }
+
+            if (in_array($key, ['CONTENT_TYPE', 'CONTENT_LENGTH'], true)) {
                 $header = strtolower(str_replace('_', '-', $key));
                 $headers[$header] = trim((string) $value);
             }
@@ -195,17 +210,12 @@ final class Request
 
 final class Response
 {
-    private int $status;
-    /** @var array<string, string> */
-    private array $headers;
-    private string $body;
-
     /** @param array<string, string> $headers */
-    public function __construct(int $status, array $headers, string $body)
-    {
-        $this->status = $status;
-        $this->headers = $headers;
-        $this->body = $body;
+    public function __construct(
+        private int $status,
+        private array $headers,
+        private string $body
+    ) {
     }
 
     /** @param array<string, mixed> $payload */
@@ -243,11 +253,8 @@ final class Response
 
 final class ApproovLogger
 {
-    private string $channel;
-
-    public function __construct(string $channel = 'approov')
+    public function __construct(private string $channel = 'approov')
     {
-        $this->channel = $channel;
     }
 
     /** @param array<string, mixed> $context */
@@ -303,21 +310,17 @@ final class Protection
 final class Route
 {
     private string $method;
-    private string $path;
-    /** @var callable */
-    private $handler;
-    private int $protection;
-    /** @var string[] */
-    private array $bindingHeaders;
 
     /** @param string[] $bindingHeaders */
-    public function __construct(string $method, string $path, callable $handler, int $protection, array $bindingHeaders = [])
-    {
+    public function __construct(
+        string $method,
+        private string $path,
+        /** @var callable */
+        private $handler,
+        private int $protection,
+        private array $bindingHeaders = []
+    ) {
         $this->method = strtoupper($method);
-        $this->path = $path;
-        $this->handler = $handler;
-        $this->protection = $protection;
-        $this->bindingHeaders = $bindingHeaders;
     }
 
     public function matches(Request $request): bool
@@ -354,8 +357,7 @@ final class Router
         callable $handler,
         int $protection = Protection::NONE,
         array $bindingHeaders = []
-    ): void
-    {
+    ): void {
         $this->routes[] = new Route($method, $path, $handler, $protection, $bindingHeaders);
     }
 
@@ -373,13 +375,8 @@ final class Router
 
 final class ApproovState
 {
-    private bool $approovEnabled;
-    private bool $tokenBindingEnabled;
-
-    public function __construct(bool $approovEnabled, bool $tokenBindingEnabled)
+    public function __construct(private bool $approovEnabled, private bool $tokenBindingEnabled)
     {
-        $this->approovEnabled = $approovEnabled;
-        $this->tokenBindingEnabled = $tokenBindingEnabled;
     }
 
     public function approovEnabled(): bool
@@ -427,11 +424,8 @@ final class ApproovState
 
 final class ApproovStateStore
 {
-    private string $path;
-
-    public function __construct(string $path)
+    public function __construct(private string $path)
     {
-        $this->path = $path;
         $directory = dirname($path);
         if (!is_dir($directory)) {
             mkdir($directory, 0755, true);
@@ -487,15 +481,20 @@ final class ApproovStateStore
         $contents = stream_get_contents($handle);
 
         if (!is_string($contents) || trim($contents) === '') {
-            return [new ApproovState(true, true), true];
+            return [$this->defaultState(), true];
         }
 
         $data = json_decode($contents, true);
         if (!is_array($data)) {
-            return [new ApproovState(true, true), true];
+            return [$this->defaultState(), true];
         }
 
         return [ApproovState::fromArray($data), false];
+    }
+
+    private function defaultState(): ApproovState
+    {
+        return new ApproovState(true, true);
     }
 
     private function persistState($handle, ApproovState $state): void
@@ -535,11 +534,8 @@ final class ApproovStateStore
 
 final class ApproovTokenVerifier
 {
-    private ApproovSecret $secret;
-
-    public function __construct(ApproovSecret $secret)
+    public function __construct(private ApproovSecret $secret)
     {
-        $this->secret = $secret;
     }
 
     /** @return array<string, mixed> */
@@ -579,7 +575,7 @@ final class ApproovTokenVerifier
         }
 
         $computed = $this->hashBase64($bindingValue);
-        return trim((string) $expected) === $computed;
+        return hash_equals(trim((string) $expected), $computed);
     }
 
     /** @param array<string, mixed> $claims */
@@ -590,7 +586,7 @@ final class ApproovTokenVerifier
         }
 
         $expiration = (int) $claims['exp'];
-        if ($expiration < time()) {
+        if ($expiration <= time()) {
             throw new UnexpectedValueException('Approov token expired.');
         }
     }
@@ -628,21 +624,12 @@ final class ApproovTokenMiddleware
     private const APPROOV_REQUIRED_HEADERS_ATTRIBUTE = 'approov_required_headers';
     private const APPROOV_FAILURE_ATTRIBUTE = 'approov_failure';
 
-    private ApproovStateStore $stateStore;
-    private ApproovTokenVerifier $validator;
-    private ApproovSecret $secret;
-    private ApproovLogger $logger;
-
     public function __construct(
-        ApproovStateStore $stateStore,
-        ApproovTokenVerifier $validator,
-        ApproovSecret $secret,
-        ApproovLogger $logger
+        private ApproovStateStore $stateStore,
+        private ApproovTokenVerifier $validator,
+        private ApproovSecret $secret,
+        private ApproovLogger $logger
     ) {
-        $this->stateStore = $stateStore;
-        $this->validator = $validator;
-        $this->secret = $secret;
-        $this->logger = $logger;
     }
 
     /** @param callable(Request): Response $next */
@@ -661,9 +648,7 @@ final class ApproovTokenMiddleware
                 self::APPROOV_REQUIRED_HEADERS_ATTRIBUTE,
                 $this->requiredHeaders($state, $bindingHeaders)
             );
-        }
-
-        if (!$state->approovEnabled()) {
+        } else {
             $request->setAttribute('approov_auth', $this->disabledAuthentication());
             return $next($request);
         }
@@ -728,28 +713,12 @@ final class ApproovTokenMiddleware
             ],
         ];
 
-        $requestId = $this->requestId($request);
+        $requestId = $request->requestId(self::REQUEST_ID_HEADER, self::REQUEST_ID_ATTRIBUTE);
         if ($requestId !== null) {
             $context['request_id'] = $requestId;
         }
 
         return $context;
-    }
-
-    private function requestId(Request $request): ?string
-    {
-        $value = $request->getAttribute(self::REQUEST_ID_ATTRIBUTE);
-        if (is_string($value) && $value !== '') {
-            return $value;
-        }
-
-        $fromHeader = $request->header(self::REQUEST_ID_HEADER);
-        if (!is_string($fromHeader)) {
-            return null;
-        }
-
-        $trimmed = trim($fromHeader);
-        return $trimmed === '' ? null : $trimmed;
     }
 
     /** @param string[] $bindingHeaders
@@ -839,13 +808,8 @@ final class RequestCompletionLogger
     private const APPROOV_REQUIRED_HEADERS_ATTRIBUTE = 'approov_required_headers';
     private const APPROOV_FAILURE_ATTRIBUTE = 'approov_failure';
 
-    private ApproovLogger $logger;
-    private ApproovStateStore $stateStore;
-
-    public function __construct(ApproovLogger $logger, ApproovStateStore $stateStore)
+    public function __construct(private ApproovLogger $logger, private ApproovStateStore $stateStore)
     {
-        $this->logger = $logger;
-        $this->stateStore = $stateStore;
     }
 
     public function log(Request $request, Response $response): void
@@ -873,7 +837,7 @@ final class RequestCompletionLogger
             $context['required_headers'] = array_values($requiredHeaders);
         }
 
-        $requestId = $this->requestId($request);
+        $requestId = $request->requestId(self::REQUEST_ID_HEADER, self::REQUEST_ID_ATTRIBUTE);
         if ($requestId !== null) {
             $context['request_id'] = $requestId;
         }
@@ -925,31 +889,12 @@ final class RequestCompletionLogger
         }
         return null;
     }
-
-    private function requestId(Request $request): ?string
-    {
-        $value = $request->getAttribute(self::REQUEST_ID_ATTRIBUTE);
-        if (is_string($value) && $value !== '') {
-            return $value;
-        }
-
-        $fromHeader = $request->header(self::REQUEST_ID_HEADER);
-        if (!is_string($fromHeader)) {
-            return null;
-        }
-
-        $trimmed = trim($fromHeader);
-        return $trimmed === '' ? null : $trimmed;
-    }
 }
 
 final class ApproovController
 {
-    private ApproovStateStore $stateStore;
-
-    public function __construct(ApproovStateStore $stateStore)
+    public function __construct(private ApproovStateStore $stateStore)
     {
-        $this->stateStore = $stateStore;
     }
 
     public function home(Request $request): Response
