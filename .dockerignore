@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+
+.DS_Store
+.local/
+.config/
+
+vendor/
+var/

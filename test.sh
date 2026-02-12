@@ -364,7 +364,7 @@ main() {
 		-setDataHashInToken "${HASH_INPUT}" \
 		-genExample \
 		example.com \
-		-type invalid || truea
+		-type invalid || true
 
 	run_test \
 		"Double Binding - invalid token" \
