@@ -39,7 +39,7 @@ final class ApproovSecret
     private ?string $error = null;
     private bool $loaded = false;
 
-    public function __construct(private string $envName)
+    public function __construct(private string $envName, private ?string $placeholderValue = null)
     {
     }
 
@@ -62,6 +62,17 @@ final class ApproovSecret
     {
         $this->load();
         return $this->error;
+    }
+
+    public function assertValidForStartup(): void
+    {
+        $this->load();
+        if ($this->secret !== null) {
+            return;
+        }
+
+        $reason = $this->error ?? 'Approov secret is missing.';
+        throw new RuntimeException("Invalid Approov secret configuration ({$this->envName}): {$reason}");
     }
 
     public function logIfMissing(ApproovLogger $logger): void
@@ -90,8 +101,14 @@ final class ApproovSecret
             return;
         }
 
+        $trimmed = trim($value);
+        if ($this->placeholderValue !== null && $trimmed === $this->placeholderValue) {
+            $this->error = "Environment variable {$this->envName} contains placeholder value.";
+            return;
+        }
+
         try {
-            $this->secret = Base64Url::decode(trim($value));
+            $this->secret = Base64Url::decode($trimmed);
         } catch (Throwable $exception) {
             $this->error = $exception->getMessage();
         }
@@ -616,6 +633,25 @@ final class ApproovTokenVerifier
     }
 }
 
+final class ApproovAuthFailure
+{
+    /** @param array<string, mixed> $context */
+    public function __construct(private string $reason, private array $context = [])
+    {
+    }
+
+    public function reason(): string
+    {
+        return $this->reason;
+    }
+
+    /** @return array<string, mixed> */
+    public function context(): array
+    {
+        return $this->context;
+    }
+}
+
 final class ApproovTokenMiddleware
 {
     private const APPROOV_HEADER = 'Approov-Token';
@@ -653,9 +689,23 @@ final class ApproovTokenMiddleware
             return $next($request);
         }
 
+        $failure = $this->authenticateEnabledRequest($request, $state, $bindingHeaders);
+        if ($failure !== null) {
+            return $this->respondUnauthorized($request, $state, $failure, $bindingHeaders);
+        }
+
+        return $next($request);
+    }
+
+    /** @param string[] $bindingHeaders */
+    private function authenticateEnabledRequest(
+        Request $request,
+        ApproovState $state,
+        array $bindingHeaders
+    ): ?ApproovAuthFailure {
         $rawToken = $request->header(self::APPROOV_HEADER);
         if (!Text::hasText($rawToken)) {
-            return $this->unauthorized($request, $state, 'missing_approov_token', $bindingHeaders);
+            return $this->failure('missing_approov_token');
         }
 
         try {
@@ -664,34 +714,41 @@ final class ApproovTokenMiddleware
             if ($state->tokenBindingEnabled() && $bindingHeaders !== []) {
                 $bindingValue = $this->extractBindingValue($request, $bindingHeaders);
                 if (!Text::hasText($bindingValue)) {
-                    return $this->unauthorized($request, $state, 'missing_binding_header', $bindingHeaders);
+                    return $this->failure('missing_binding_header');
                 }
                 if (!$this->validator->isBindingValid($bindingValue, $claims)) {
-                    return $this->unauthorized($request, $state, 'binding_mismatch', $bindingHeaders);
+                    return $this->failure('binding_mismatch');
                 }
             }
 
             $request->setAttribute('approov_auth', ['principal' => 'approov-token']);
-            return $next($request);
+            return null;
         } catch (Throwable $exception) {
-            return $this->unauthorized($request, $state, 'token_verification_failed', $bindingHeaders, [
+            return $this->failure('token_verification_failed', [
                 'error' => $exception->getMessage(),
                 'exception' => get_class($exception),
             ]);
         }
     }
 
+    /** @param array<string, mixed> $context */
+    private function failure(string $reason, array $context = []): ApproovAuthFailure
+    {
+        return new ApproovAuthFailure($reason, $context);
+    }
+
     /** @param string[] $bindingHeaders
-     *  @param array<string, mixed> $context
      */
-    private function unauthorized(
+    private function respondUnauthorized(
         Request $request,
         ApproovState $state,
-        string $reason,
+        ApproovAuthFailure $failure,
         array $bindingHeaders = [],
-        array $context = []
     ): Response {
-        $context = array_merge($this->baseLogContext($request, $state, $reason, $bindingHeaders), $context);
+        $context = array_merge(
+            $this->baseLogContext($request, $state, $failure->reason(), $bindingHeaders),
+            $failure->context()
+        );
         $request->setAttribute(self::APPROOV_FAILURE_ATTRIBUTE, $context);
 
         return Response::json(['message' => 'Approov authentication failed.'], 401);
@@ -975,7 +1032,13 @@ final class ApproovController
     }
 }
 
-$secret = new ApproovSecret('APPROOV_BASE64URL_SECRET');
+$secret = new ApproovSecret('APPROOV_BASE64URL_SECRET', 'approov_base64url_secret_here');
+try {
+    $secret->assertValidForStartup();
+} catch (RuntimeException $exception) {
+    error_log($exception->getMessage());
+    exit(1);
+}
 $logger = new ApproovLogger();
 $stateStore = new ApproovStateStore(__DIR__ . '/var/approov_state.json');
 $validator = new ApproovTokenVerifier($secret);
@@ -995,23 +1058,33 @@ $router->add('GET', '/token-check', [$controller, 'tokenCheck'], Protection::TOK
 $router->add('GET', '/token-binding', [$controller, 'tokenBinding'], Protection::TOKEN_BINDING, ['Authorization']);
 $router->add('GET', '/token-double-binding', [$controller, 'tokenDoubleBinding'], Protection::TOKEN_DOUBLE_BINDING, ['Authorization', 'SessionId']);
 
-$request = Request::fromGlobals();
+try {
+    $request = Request::fromGlobals();
 
-$route = $router->match($request);
+    $route = $router->match($request);
 
-if ($route === null) {
-    Response::json(['error' => 'Not Found'], 404)->send();
-    exit;
-}
-
-$response = $middleware->handle(
-    $request,
-    $route,
-    static function (Request $request) use ($route): Response {
-        $handler = $route->handler();
-        return $handler($request);
+    if ($route === null) {
+        Response::json(['error' => 'Not Found'], 404)->send();
+        exit;
     }
-);
 
-$requestLogger->log($request, $response);
-$response->send();
+    $response = $middleware->handle(
+        $request,
+        $route,
+        static function (Request $request) use ($route): Response {
+            $handler = $route->handler();
+            return $handler($request);
+        }
+    );
+
+    $requestLogger->log($request, $response);
+    $response->send();
+} catch (Throwable $exception) {
+    error_log('Unhandled exception: ' . get_class($exception) . ': ' . $exception->getMessage());
+
+    if (!headers_sent()) {
+        Response::json(['message' => 'Internal Server Error'], 500)->send();
+    }
+
+    exit(1);
+}

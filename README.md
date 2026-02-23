@@ -7,28 +7,22 @@ This project provides a server-side example of Approov token verification for a 
  - `/token-binding` - requires a valid Approov token which is bound to a header value.
  - `/token-double-binding` - requires a valid Approov token which is bound to two header values.
 
-In this example:
+In this example, Approov token verification is implemented in `ApproovApplication.php`. The responsibilities break down as follows:
 
-- **JWT Approov Token validation (signature + expiry)** is implemented in
-  [ApproovTokenVerifier::verifyApproovToken()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L542-L566).
-  It verifies the JWT signature and rejects tokens with missing or expired `exp`.
+1. **JWT Approov Token validation (signature + expiry)** is implemented in [ApproovTokenVerifier::verifyApproovToken() + validateExpiration()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L559-L609).
+It verifies the JWT signature and rejects tokens with a missing or expired `exp` claim.
 
-- **Token binding (`pay` + hash)** is implemented in
-  [ApproovTokenVerifier::isBindingValid() + hashBase64()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L570-L607).
-  It computes `base64(sha256(bindingValue))` and compares it to `pay`.
+2. **Token binding (`pay` + hash)** is implemented in [ApproovTokenVerifier::isBindingValid() + hashBase64()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L587-L625).
+It computes `base64(sha256(bindingValue))` and compares it to `pay`.
 
-- **Middleware enforcement (token + binding)** is in
-  [ApproovTokenMiddleware::handle()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L636-L682).
-  It requires the `Approov-Token` header and returns `401` if the token is missing or invalid.
+3. **Middleware enforcement (token + binding)** is in [ApproovTokenMiddleware::handle() + authenticateEnabledRequest() + respondUnauthorized()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L672-L755).
+It requires the `Approov-Token` header (when protection is enabled) and returns `401` if token verification or binding validation fails.
 
-- **Binding value selection (what gets hashed)** is in
-  [ApproovTokenMiddleware::extractBindingValue()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L759-L770).
-  It uses `Authorization` for single binding, or `Authorization + SessionId` for double binding.
+4. **Binding value selection (what gets hashed)** is in [ApproovTokenMiddleware::extractBindingValue()](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L816-L828).
+It uses `Authorization` for single binding, or `Authorization + SessionId` for double binding.
 
-- **Protected route levels** are defined in
-  [Protection](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L292-L307),
-  and **protected routes are registered** at
-  [ApproovApplication.php](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L986-L996).
+5. **Protected route levels** are defined in [Protection](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L309-L325),
+and **protected routes are registered** at [ApproovApplication.php](https://github.com/approov/quickstart-php-token-check/blob/refactor/php-quickstart/ApproovApplication.php#L1049-L1059).
 
 ## Approov Token Verification Flow
 
