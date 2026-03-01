@@ -1,0 +1,16 @@
+{
+  "name": "approov/quickstart-php-token-check",
+  "description": "Approov token verification quickstart (plain PHP).",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": "^8.5",
+    "vlucas/phpdotenv": "^5.6.3"
+  },
+  "scripts": {
+    "start": "php -S 0.0.0.0:8080 ApproovApplication.php 2>&1 | grep -vE 'Accepted|Closing'"
+  },
+  "config": {
+    "process-timeout": 0
+  }
+}
